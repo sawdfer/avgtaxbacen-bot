@@ -13,22 +13,51 @@ def get_cotacao(data_inicio, data_fim):
         return data.get('value', [])
     else:
         print(f"Erro ao obter cotações: {response.status_code}")
+        print(f"Detalhes do erro: {response.text}")  # Adicionado para depuração
         return None
+
+def calcular_medias_mensais(cotacoes):
+    if not cotacoes:
+        return None
+    
+    df = pd.DataFrame(cotacoes)
+    df['dataHoraCotacao'] = pd.to_datetime(df['dataHoraCotacao'], errors='coerce')
+    df = df.dropna(subset=['dataHoraCotacao'])
+    df['Mes'] = df['dataHoraCotacao'].dt.to_period('M')
+    medias_mensais = df.groupby('Mes')[['cotacaoCompra', 'cotacaoVenda']].mean().reset_index()
+    medias_mensais['Mês'] = medias_mensais['Mes'].dt.strftime('%B/%Y').str.upper()
+    medias_mensais = medias_mensais.rename(columns={'Mês': 'Período', 'cotacaoCompra': 'Média Compra', 'cotacaoVenda': 'Média Venda'})
+    medias_mensais['Média Compra'] = medias_mensais['Média Compra'].apply(lambda x: f"{x:.4f}".replace('.', ','))
+    medias_mensais['Média Venda'] = medias_mensais['Média Venda'].apply(lambda x: f"{x:.4f}".replace('.', ','))
+    return medias_mensais[['Período', 'Média Compra', 'Média Venda']]
 
 def get_image_base64(data_inicio, data_fim):
     cotacoes = get_cotacao(data_inicio, data_fim)
     if cotacoes:
         df = pd.DataFrame(cotacoes)
-        df['dataHoraCotacao'] = pd.to_datetime(df['dataHoraCotacao'])
+
+        if 'dataHoraCotacao' not in df.columns:
+            print("A chave 'dataHoraCotacao' não está presente nos dados.")
+            return None
+        
+        # Verificar e remover espaços em branco ou caracteres especiais nos nomes das colunas
+        df.columns = df.columns.str.strip()
+        
+        # Converter a coluna 'dataHoraCotacao' para datetime
+        df['dataHoraCotacao'] = pd.to_datetime(df['dataHoraCotacao'], errors='coerce')
+        if df['dataHoraCotacao'].isnull().any():
+            print("Erro ao converter 'dataHoraCotacao' para datetime.")
+            print(df['dataHoraCotacao'])  # Adicionado para depuração
+            return None
+
         df = df.set_index('dataHoraCotacao')
         
-        # Plotar gráfico
-        plt.figure(figsize=(10, 5))
+        # Plotar gráfico maior
+        plt.figure(figsize=(14, 7))  # Aumentando o tamanho do gráfico
         plt.plot(df.index.strftime('%d/%m/%Y'), df['cotacaoCompra'], marker=',', linestyle='-', color='#6a0dad', label='Compra', linewidth=2)
         plt.plot(df.index.strftime('%d/%m/%Y'), df['cotacaoVenda'], marker=',', linestyle='-', color='#9370DB', label='Venda', linewidth=2)
         
         plt.style.use('seaborn-v0_8')
-        plt.title('Variação do Dólar', fontsize=16, fontweight='bold', color='#6a0dad')
         plt.ylabel('Valor (R$)', fontsize=12, fontweight='bold', color='#6a0dad')
         plt.legend()
         plt.grid(True)
@@ -50,22 +79,24 @@ def get_image_base64(data_inicio, data_fim):
         return None
 
 def main():
-    data_inicio = "06-01-2024"
-    data_fim = "06-28-2024"
-    image_base64 = get_image_base64(data_inicio, data_fim)
+    data_inicio = input("Digite a data de início (formato MM-DD-AAAA): ")
+    data_fim = input("Digite a data de fim (formato MM-DD-AAAA): ")
+    cotacoes = get_cotacao(data_inicio, data_fim)
+    medias_mensais = calcular_medias_mensais(cotacoes)
     
-    if image_base64:
-        cotacoes = get_cotacao(data_inicio, data_fim)
-        df = pd.DataFrame(cotacoes)
-        df['dataHoraCotacao'] = pd.to_datetime(df['dataHoraCotacao'])
-        df['Data'] = df['dataHoraCotacao'].dt.strftime('%d/%m/%Y')
-        df = df[['Data', 'cotacaoCompra', 'cotacaoVenda']].rename(columns={
-            'cotacaoCompra': 'Compra',
-            'cotacaoVenda': 'Venda'
-        })
+    if cotacoes is not None and medias_mensais is not None:
+        # Gerar tabela de médias mensais em formato vertical e menor
+        medias_mensais_html = medias_mensais.to_html(index=False, justify='center', classes='table table-striped')
         
         # Gerar tabela de precificação diária
-        tabela_html = df.to_html(index=False, justify='center', classes='table table-striped')
+        df = pd.DataFrame(cotacoes)
+        tabela_html = df[['dataHoraCotacao', 'cotacaoCompra', 'cotacaoVenda']].copy()
+        tabela_html['dataHoraCotacao'] = pd.to_datetime(tabela_html['dataHoraCotacao'], errors='coerce')
+        tabela_html['dataHoraCotacao'] = tabela_html['dataHoraCotacao'].dt.strftime('%d/%m/%Y')
+        tabela_html = tabela_html.rename(columns={'dataHoraCotacao': 'Data', 'cotacaoCompra': 'Compra', 'cotacaoVenda': 'Venda'})
+        tabela_html['Compra'] = tabela_html['Compra'].apply(lambda x: f"{x:.4f}".replace('.', ','))
+        tabela_html['Venda'] = tabela_html['Venda'].apply(lambda x: f"{x:.4f}".replace('.', ','))
+        tabela_html = tabela_html.to_html(index=False, justify='center', classes='table table-striped')
 
         # Construir o corpo do e-mail com melhor design
         html = f"""
@@ -96,21 +127,20 @@ def main():
                     padding-bottom: 5px;
                 }}
                 .chart {{
-                    text-align: center;
+                    margin-bottom: 20px;
                 }}
                 .chart img {{
-                    max-width: 100%;
-                    height: auto;
+                    width: 100%;
                     border: 1px solid #6a0dad;
                     border-radius: 8px;
                 }}
                 table {{
                     width: 100%;
                     border-collapse: collapse;
-                    margin: 20px 0;
+                    margin-bottom: 20px;
                 }}
                 th, td {{
-                    padding: 12px;
+                    padding: 8px;
                     border: 1px solid #dddddd;
                     text-align: center;
                 }}
@@ -134,12 +164,24 @@ def main():
         <body>
             <div class="container">
                 <h1>Dashboard de Variação do Dólar</h1>
-                <h2>Variação do Dólar</h2>
+                <div class="table-container">
+                    <h2>Médias Mensais</h2>
+                    <table>
+                        <tbody>
+                            {medias_mensais_html}
+                        </tbody>
+                    </table>
+                </div>
                 <div class="chart">
-                    <img src="data:image/png;base64,{image_base64}" alt="Variação do Dólar">
+                    <h2>Variação do Dólar</h2>
+                    <img src="data:image/png;base64,{get_image_base64(data_inicio, data_fim)}" alt="Variação do Dólar">
                 </div>
                 <h2>Precificação Diária</h2>
-                {tabela_html}
+                <table>
+                    <tbody>
+                        {tabela_html}
+                    </tbody>
+                </table>
                 <div class="footer">
                     <p>Este é um e-mail automático, por favor, não responda.</p>
                 </div>
@@ -157,10 +199,8 @@ def main():
             file.write("Content-Transfer-Encoding: 8bit\n")
             file.write("\n")
             file.write(html)
-        
-        print(f"Arquivo .eml gerado com sucesso em: {file_path}")
-        print("Rascunho do e-mail gerado com sucesso!")
 
+        print(f"Email gerado com sucesso: {file_path}")
     else:
         print("Não foi possível obter as cotações ou gerar o gráfico.")
 
